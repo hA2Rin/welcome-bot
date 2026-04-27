@@ -3,19 +3,20 @@ const { REST } = require('@discordjs/rest');
 const { createClient } = require('@supabase/supabase-js');
 const express = require('express');
 
-// --- 1. UptimeRobot & 허깅페이스용 웹 서버 설정 ---
+// --- 1. UptimeRobot & Render용 웹 서버 설정 ---
 const app = express();
+const PORT = process.env.PORT || 3000; // Render에서 제공하는 포트를 사용하거나 기본값 3000 사용
+
 app.get('/', (req, res) => res.send('봇이 정상 작동 중입니다! (DB & 슬래시 커맨드 모드)'));
-app.listen(7860, () => console.log('웹 서버가 7860 포트에서 준비되었습니다.'));
+app.listen(PORT, () => console.log(`웹 서버가 ${PORT} 포트에서 준비되었습니다.`));
 
 // --- 2. 외부 서비스 연결 (Supabase & Discord) ---
-// 허깅페이스 Settings -> Secrets에 넣을 이름들입니다.
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers, // 입장 감지를 위해 필수!
+    GatewayIntentBits.GuildMembers, 
   ],
 });
 
@@ -23,7 +24,6 @@ const client = new Client({
 client.on('ready', async () => {
   console.log(`${client.user.tag} 로그인이 완료되었습니다!`);
 
-  // 전역 슬래시 명령어 정의
   const commands = [
     new SlashCommandBuilder()
       .setName('채널설정')
@@ -32,7 +32,7 @@ client.on('ready', async () => {
         option.setName('채널')
           .setDescription('환영 인사를 보낼 채팅방을 선택해 주세요.')
           .setRequired(true))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) // 관리자 권한 필수
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) 
   ].map(command => command.toJSON());
 
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -53,7 +53,6 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.commandName === '채널설정') {
     const channel = interaction.options.getChannel('채널');
 
-    // Supabase DB에 서버 설정 저장 (있으면 덮어쓰기)
     const { error } = await supabase
       .from('server_settings')
       .upsert({ 
@@ -68,7 +67,7 @@ client.on('interactionCreate', async (interaction) => {
 
     await interaction.reply({
       content: `✅ 설정 완료! 앞으로 이 서버의 환영 인사는 ${channel} 채널에 전송됩니다.`,
-      ephemeral: true // 오직 명령어를 친 관리자에게만 보임
+      ephemeral: true 
     });
   }
 });
@@ -76,7 +75,7 @@ client.on('interactionCreate', async (interaction) => {
 // --- 5. 멤버 입장 시 환영 인사 전송 (DB 조회) ---
 client.on('guildMemberAdd', async (member) => {
   if (member.user.bot) return;
-  // DB에서 해당 서버(guild_id)의 설정값을 가져옵니다.
+  
   const { data, error } = await supabase
     .from('server_settings')
     .select('welcome_channel_id')
@@ -88,7 +87,6 @@ client.on('guildMemberAdd', async (member) => {
     return;
   }
 
-  // 저장된 채널 ID로 채널 객체 찾기
   const channel = member.guild.channels.cache.get(data.welcome_channel_id);
   
   if (channel) {
