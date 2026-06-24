@@ -5,7 +5,6 @@ const mongoose = require('mongoose');
 const express = require('express');
 
 // --- [설정] 명령어를 사용할 수 있는 관리자 역할(Role) ID 목록 ---
-// 여기에 명령어 실행을 허용할 디스코드 역할의 고유 ID들을 문자열로 넣어주세요.
 const ALLOWED_ROLE_IDS = [
     '1482357650367975458', // 관리자 역할 1 ID 예시
     '1480570310116773888',  // 부관리자 역할 2 ID 예시 (필요한 만큼 추가 가능)
@@ -175,10 +174,17 @@ client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
 
+    // 공통 권한 에러 임베드 템플릿
+    const noPermissionEmbed = new EmbedBuilder()
+        .setTitle('❌ 권한 거부')
+        .setDescription('이 명령어를 사용할 수 있는 권한이 없습니다.')
+        .setColor(0xFF0000)
+        .setTimestamp();
+
     // 4-1. 채널설정 (Supabase) - 기본 관리자 권한 체크 유지
     if (commandName === '채널설정') {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-            return await interaction.reply({ content: '❌ 관리자 권한이 필요합니다.', ephemeral: true });
+            return await interaction.reply({ embeds: [noPermissionEmbed], ephemeral: true });
         }
 
         const channel = interaction.options.getChannel('채널');
@@ -191,20 +197,27 @@ client.on('interactionCreate', async (interaction) => {
 
         if (error) {
             console.error('DB 저장 에러:', error);
-            return interaction.reply({ content: '❌ 설정 저장 중 오류가 발생했습니다.', ephemeral: true });
+            const dbErrorEmbed = new EmbedBuilder()
+                .setTitle('❌ 오류 발생')
+                .setDescription('설정 저장 중 오류가 발생했습니다.')
+                .setColor(0xFF0000);
+            return interaction.reply({ embeds: [dbErrorEmbed], ephemeral: true });
         }
 
-        await interaction.reply({
-            content: `✅ 설정 완료! 앞으로 이 서버의 환영 인사는 ${channel} 채널에 전송됩니다.`,
-            ephemeral: true 
-        });
+        const setupSuccessEmbed = new EmbedBuilder()
+            .setTitle('✅ 채널 설정 완료')
+            .setDescription(`앞으로 이 서버의 환영 인사는 ${channel} 채널에 전송됩니다.`)
+            .setColor(0x00FF00)
+            .setTimestamp();
+
+        await interaction.reply({ embeds: [setupSuccessEmbed], ephemeral: true });
     }
 
     // 4-2. 경고 부여 (역할 ID 체크)
     if (commandName === '경고') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
-            return await interaction.reply({ content: '❌ 이 명령어를 사용할 수 있는 권한이 없습니다.', ephemeral: true });
+            return await interaction.reply({ embeds: [noPermissionEmbed], ephemeral: true });
         }
 
         const targetUser = interaction.options.getUser('대상');
@@ -253,14 +266,14 @@ client.on('interactionCreate', async (interaction) => {
             ).setTimestamp();
 
         if (warnChannel) await warnChannel.send({ embeds: [manualEmbed] }).catch(() => {});
-        await interaction.reply({ content: `🚨 <@${targetUser.id}>님에게 수동 경고 조치를 완료했습니다.`, embeds: [manualEmbed] });
+        await interaction.reply({ embeds: [manualEmbed] });
     }
 
     // 4-3. 경고 차감 (역할 ID 체크)
     if (commandName === '경고차감') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
-            return await interaction.reply({ content: '❌ 이 명령어를 사용할 수 있는 권한이 없습니다.', ephemeral: true });
+            return await interaction.reply({ embeds: [noPermissionEmbed], ephemeral: true });
         }
 
         const targetUser = interaction.options.getUser('대상');
@@ -284,30 +297,41 @@ client.on('interactionCreate', async (interaction) => {
         
         if (reason) deductEmbed.addFields({ name: '📝 차감 사유', value: reason });
         if (warnChannel) await warnChannel.send({ embeds: [deductEmbed] }).catch(() => {});
-        await interaction.reply({ content: `✅ <@${targetUser.id}>님의 경고를 차감하였습니다.`, embeds: [deductEmbed] });
+        await interaction.reply({ embeds: [deductEmbed] });
     }
 
     // 4-4. 경고 한도 설정 (역할 ID 체크)
     if (commandName === '경고한도') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
-            return await interaction.reply({ content: '❌ 이 명령어를 사용할 수 있는 권한이 없습니다.', ephemeral: true });
+            return await interaction.reply({ embeds: [noPermissionEmbed], ephemeral: true });
         }
 
         const newLimit = interaction.options.getInteger('설정값');
         if (newLimit === null) {
             const settings = await GuildSettings.findOne({ guildId: interaction.guild.id });
-            return await interaction.reply({ embeds: [new EmbedBuilder().setTitle('⚙️ 서버 경고 한도 정보').setDescription(`현재 한도: **${settings ? settings.maxWarnings : 5}회**`)] });
+            const infoEmbed = new EmbedBuilder()
+                .setTitle('⚙️ 서버 경고 한도 정보')
+                .setDescription(`현재 한도: **${settings ? settings.maxWarnings : 5}회**`)
+                .setColor(0x0099FF)
+                .setTimestamp();
+            return await interaction.reply({ embeds: [infoEmbed] });
         }
         await GuildSettings.findOneAndUpdate({ guildId: interaction.guild.id }, { maxWarnings: newLimit }, { upsert: true });
-        await interaction.reply({ content: `✅ 경고 한도가 **${newLimit}회**로 변경되었습니다.` });
+
+        const limitUpdateEmbed = new EmbedBuilder()
+            .setTitle('⚙️ 서버 경고 한도 변경')
+            .setDescription(`✅ 경고 한도가 **${newLimit}회**로 성공적으로 변경되었습니다.`)
+            .setColor(0x00FF00)
+            .setTimestamp();
+        await interaction.reply({ embeds: [limitUpdateEmbed] });
     }
 
     // 4-5. 화이트리스트 채널 조작 (역할 ID 체크)
     if (commandName === '화이트리스트') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
-            return await interaction.reply({ content: '❌ 이 명령어를 사용할 수 있는 권한이 없습니다.', ephemeral: true });
+            return await interaction.reply({ embeds: [noPermissionEmbed], ephemeral: true });
         }
 
         const subcommand = interaction.options.getSubcommand();
