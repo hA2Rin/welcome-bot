@@ -1,6 +1,5 @@
 const { Client, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder, Routes, EmbedBuilder, ApplicationCommandOptionType } = require('discord.js');
 const { REST } = require('@discordjs/rest');
-const { createClient } = require('@supabase/supabase-js');
 const mongoose = require('mongoose');
 const express = require('express');
 
@@ -15,12 +14,10 @@ const ALLOWED_ROLE_IDS = [
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.get('/', (req, res) => res.send('봇이 정상 작동 중입니다! (DB & 슬래시 커맨드 모드)'));
+app.get('/', (req, res) => res.send('봇이 정상 작동 중입니다! (MongoDB 올인원 모드)'));
 app.listen(PORT, () => console.log(`웹 서버가 ${PORT} 포트에서 준비되었습니다.`));
 
-// --- 2. External Services (Supabase & MongoDB) ---
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-
+// --- 2. External Services (MongoDB 전용 연동) ---
 mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log('몽고DB 연결 성공'))
     .catch((err) => console.error('몽고DB 연결 실패:', err));
@@ -33,13 +30,15 @@ const warningSchema = new mongoose.Schema({
 });
 const Warning = mongoose.model('Warning', warningSchema);
 
+// 기존 스키마에 welcomeChannelId 필드 통합 추가
 const guildSettingsSchema = new mongoose.Schema({
     guildId: { type: String, unique: true },
-    maxWarnings: { type: Number, default: 5 }
+    maxWarnings: { type: Number, default: 5 },
+    welcomeChannelId: { type: String, default: null } // 🌟 Supabase에서 이사 온 환영 채널 ID
 });
 const GuildSettings = mongoose.model('GuildSettings', guildSettingsSchema);
 
-// 화이트리스트 유저 스키마 (채널에서 유저로 변경)
+// 화이트리스트 유저 스키마
 const whitelistUserSchema = new mongoose.Schema({
     guildId: String,
     userId: String
@@ -82,7 +81,7 @@ client.on('ready', async () => {
         console.error('전역 명령어 등록 중 에러 발생:', error);
     }
 
-    // 3-2. 서버별 명령어 등록 (경고 및 화이트리스트 기능 포함)
+    // 3-2. 서버별 명령어 등록
     const guildCommands = [
         {
             name: '경고',
@@ -135,7 +134,7 @@ client.on('ready', async () => {
             name: '경고한도',
             description: '서버의 최대 누적 경고 제한 수치를 확인하거나 수정합니다.',
             options: [
-                { name: '설정값', description: '변경할 경고 한도 숫자를 입력하세요. (비워두면 현재 한도 조회)', type: ApplicationCommandOptionType.Integer, required: false }
+                { name: '설정값', description: '변경할 경고 한도 숫자가 있으면 입력하세요. (비워두면 현재 한도 조회)', type: ApplicationCommandOptionType.Integer, required: false }
             ]
         },
         {
@@ -169,51 +168,51 @@ client.on('ready', async () => {
     }
 });
 
-// --- 4. 슬래시 명령어 처리 (Supabase & MongoDB 통합) ---
+// --- 4. 슬래시 명령어 처리 ---
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
 
-    // 공통 권한 에러 임베드 템플릿
     const noPermissionEmbed = new EmbedBuilder()
         .setTitle('❌ 권한 거부')
         .setDescription('이 명령어를 사용할 수 있는 권한이 없습니다.')
         .setColor(0xFF0000)
         .setTimestamp();
 
-    // 4-1. 채널설정 (Supabase) - 기본 관리자 권한 체크 유지
+    // 4-1. 채널설정 (🌟 MongoDB 연동으로 완전히 전환 완료)
     if (commandName === '채널설정') {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
             return await interaction.reply({ embeds: [noPermissionEmbed], ephemeral: true });
         }
 
         const channel = interaction.options.getChannel('채널');
-        const { error } = await supabase
-            .from('server_settings')
-            .upsert({ 
-                guild_id: interaction.guildId, 
-                welcome_channel_id: channel.id 
-            });
 
-        if (error) {
-            console.error('DB 저장 에러:', error);
+        try {
+            // GuildSettings 컬렉션에 welcomeChannelId를 업데이트 또는 새로 생성(upsert)
+            await GuildSettings.findOneAndUpdate(
+                { guildId: interaction.guildId },
+                { welcomeChannelId: channel.id },
+                { upsert: true }
+            );
+
+            const setupSuccessEmbed = new EmbedBuilder()
+                .setTitle('✅ 채널 설정 완료')
+                .setDescription(`앞으로 이 서버의 환영 인사는 ${channel} 채널에 전송됩니다.`)
+                .setColor(0x00FF00)
+                .setTimestamp();
+
+            await interaction.reply({ embeds: [setupSuccessEmbed], ephemeral: true });
+        } catch (error) {
+            console.error('MongoDB 채널 설정 저장 에러:', error);
             const dbErrorEmbed = new EmbedBuilder()
                 .setTitle('❌ 오류 발생')
-                .setDescription('설정 저장 중 오류가 발생했습니다.')
+                .setDescription('데이터베이스에 설정을 저장하는 중 오류가 발생했습니다.')
                 .setColor(0xFF0000);
             return interaction.reply({ embeds: [dbErrorEmbed], ephemeral: true });
         }
-
-        const setupSuccessEmbed = new EmbedBuilder()
-            .setTitle('✅ 채널 설정 완료')
-            .setDescription(`앞으로 이 서버의 환영 인사는 ${channel} 채널에 전송됩니다.`)
-            .setColor(0x00FF00)
-            .setTimestamp();
-
-        await interaction.reply({ embeds: [setupSuccessEmbed], ephemeral: true });
     }
 
-    // 4-2. 경고 부여 (역할 ID 체크)
+    // 4-2. 경고 부여
     if (commandName === '경고') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
@@ -269,7 +268,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ embeds: [manualEmbed] });
     }
 
-    // 4-3. 경고 차감 (역할 ID 체크)
+    // 4-3. 경고 차감
     if (commandName === '경고차감') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
@@ -300,7 +299,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ embeds: [deductEmbed] });
     }
 
-    // 4-4. 경고 한도 설정 (역할 ID 체크)
+    // 4-4. 경고 한도 설정
     if (commandName === '경고한도') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
@@ -327,7 +326,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ embeds: [limitUpdateEmbed] });
     }
 
-    // 4-5. 화이트리스트 유저 조작 (공개 메시지 전환 및 임베드 필드 추가 완료)
+    // 4-5. 화이트리스트 유저 조작
     if (commandName === '화이트리스트') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
@@ -354,7 +353,6 @@ client.on('interactionCreate', async (interaction) => {
                 )
                 .setTimestamp();
 
-            // ephemeral: false 처리하여 다른 유저들도 카드를 볼 수 있게 설정
             await interaction.reply({ embeds: [registerEmbed], ephemeral: false });
 
         } else if (subcommand === '해제') {
@@ -370,37 +368,37 @@ client.on('interactionCreate', async (interaction) => {
                 )
                 .setTimestamp();
 
-            // 해제 카드도 모두가 볼 수 있도록 설정
             await interaction.reply({ embeds: [removeEmbed], ephemeral: false });
         }
     }
 });
 
-// --- 5. 멤버 입장 시 환영 인사 전송 (Supabase 조회) ---
+// --- 5. 멤버 입장 시 환영 인사 전송 (🌟 MongoDB 조회로 변환 완료) ---
 client.on('guildMemberAdd', async (member) => {
     if (member.user.bot) return;
     
-    const { data, error } = await supabase
-        .from('server_settings')
-        .select('welcome_channel_id')
-        .eq('guild_id', member.guild.id)
-        .single();
+    try {
+        // MongoDB에서 해당 서버의 환경설정 문서를 가져옵니다.
+        const settings = await GuildSettings.findOne({ guildId: member.guild.id });
 
-    if (error || !data) {
-        console.log('이 서버는 환영 채널 설정이 되어있지 않습니다.');
-        return;
-    }
+        if (!settings || !settings.welcomeChannelId) {
+            console.log('이 서버는 환영 채널 설정이 되어있지 않습니다.');
+            return;
+        }
 
-    const channel = member.guild.channels.cache.get(data.welcome_channel_id);
-    
-    if (channel) {
-        channel.send(`${member}님 오셔서 환영합니다!!
+        const channel = member.guild.channels.cache.get(settings.welcomeChannelId);
+        
+        if (channel) {
+            channel.send(`${member}님 오셔서 환영합니다!!
 
 ╰˚｡⋆📝<#1482351706628161649>에 양식에 맞춰서 자기소개 해주시고 나이성별 비공 가능합니다!
 
 │˚｡⋆📢<#1476962498912714840>에 있는 │˚｡⋆📚<#1476961964419846176>이랑 │˚｡⋆⛔<#1497953540688187654> 확인 부탁드리겠습니다!
 
 그리고 2일동안 자기소개 작성 안할 시 퇴장당하실 수 있습니다.`);
+        }
+    } catch (error) {
+        console.error('환영 채널을 불러오는 중 MongoDB 에러 발생:', error);
     }
 });
 
@@ -470,7 +468,7 @@ const forbiddenWords = [
     "은년", "을년", "임마", "입싸", "잡것", "잡넘", "접년", 
     "정액", "젖꼭지", "젖꼮찌", "쥬디", 
     "지스팟", "질싸", "짜식", "짜아식", "짜지", "짜찌", "쫍빱", "창놈", 
-    "촌년", "촌놈", "캐년", "캐놈", "탱구", "팔럼", "헐보", "호구", 
+    "쳐닥", "촌년", "촌놈", "캐년", "캐놈", "탱구", "팔럼", "헐보", "호구", 
     "호로", "후라덜", "후라들", "후래자식", "후레자식", "후레", 
     "후뢰", "후장", "새애액스", "세에엑스", "세애액스", "새에액스", "샥스", "쎽", 
     "쎡", "쎾", "쏐", "쒝", "쒞", "양년", "항문수셔", "항문쑤셔", 
@@ -487,14 +485,11 @@ client.on('messageCreate', async (message) => {
     if (!message.guild || message.author.bot) return;
 
     // 🌟 [마스터 면제 코드] 화이트리스트 유저 체크
-    // 추후 다른 규칙(링크 감시, 도배 방지 등)을 새로 만드시더라도 이 아래쪽 라인에 배치하면,
-    // 화이트리스트 유저는 무조건 이 위에서 리턴(종료)되어 아무런 제재 규칙도 받지 않게 됩니다.
     const isWhitelisted = await WhitelistUser.findOne({ guildId: message.guild.id, userId: message.author.id });
     if (isWhitelisted) return; 
 
     // 금지어 필터링 감시
     if (forbiddenWords.some(word => message.content.includes(word))) {
-        // 필터링 면제 대상: 서버 소유자이거나 관리자 역할(Role)을 가진 유저
         const hasManageRole = message.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (message.guild.ownerId === message.author.id || hasManageRole) return;
         
