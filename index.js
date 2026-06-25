@@ -290,7 +290,7 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
 
-        const warnChannel = interaction.guild.channels.cache.find(ch => ch.id === '1497953540688187654');
+        const warnChannel = interaction.guild.channels.cache.find(ch => ch.name === '경고');
         const manualEmbed = new EmbedBuilder()
             .setTitle(isAutoKicked ? '🚨 [자동 제재] 경고 한도 초과' : '경고 지급')
             .setColor(isAutoKicked ? 0xFF0000 : 0xFFCC00)
@@ -334,7 +334,7 @@ client.on('interactionCreate', async (interaction) => {
 
         // DB 동기화 (처벌이 해제되었으므로 punishmentPeriod도 '없음'으로 리셋)
         userData = await Warning.findOneAndUpdate({ guildId: interaction.guild.id, userId: targetUser.id }, { count: afterCount, punishmentPeriod: '없음' }, { upsert: true, new: true });
-        const warnChannel = interaction.guild.channels.cache.find(ch => ch.id === '1497953540688187654');
+        const warnChannel = interaction.guild.channels.cache.find(ch => ch.name === '경고');
 
         const deductEmbed = new EmbedBuilder()
             .setTitle('경고 차감')
@@ -388,6 +388,17 @@ client.on('interactionCreate', async (interaction) => {
         const targetUser = interaction.options.getUser('유저');
 
         if (subcommand === '등록') {
+            // 🌟 [중복 처리 추가] 이미 화이트리스트에 존재하는지 사전 체크
+            const existingWhitelist = await WhitelistUser.findOne({ guildId: interaction.guild.id, userId: targetUser.id });
+            if (existingWhitelist) {
+                const alreadyExistsEmbed = new EmbedBuilder()
+                    .setTitle('❌ 등록 실패')
+                    .setDescription(`<@${targetUser.id}> 유저는 이미 화이트리스트에 등록되어 있습니다.`)
+                    .setColor(0xFF0000)
+                    .setTimestamp();
+                return await interaction.reply({ embeds: [alreadyExistsEmbed], ephemeral: true });
+            }
+
             await WhitelistUser.findOneAndUpdate(
                 { guildId: interaction.guild.id, userId: targetUser.id },
                 { guildId: interaction.guild.id, userId: targetUser.id },
