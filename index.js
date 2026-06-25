@@ -39,12 +39,12 @@ const guildSettingsSchema = new mongoose.Schema({
 });
 const GuildSettings = mongoose.model('GuildSettings', guildSettingsSchema);
 
-// 화이트리스트 채널 스키마
-const whitelistChannelSchema = new mongoose.Schema({
+// 화이트리스트 유저 스키마 (채널에서 유저로 변경)
+const whitelistUserSchema = new mongoose.Schema({
     guildId: String,
-    channelId: String
+    userId: String
 });
-const WhitelistChannel = mongoose.model('WhitelistChannel', whitelistChannelSchema);
+const WhitelistUser = mongoose.model('WhitelistUser', whitelistUserSchema);
 
 // 디스코드 클라이언트 설정
 const client = new Client({
@@ -140,19 +140,19 @@ client.on('ready', async () => {
         },
         {
             name: '화이트리스트',
-            description: '금지어 필터링 감시를 면제할 채널을 관리합니다.',
+            description: '금지어 필터링 감시를 면제할 유저를 관리합니다.',
             options: [
                 {
                     name: '등록',
-                    description: '금지어 필터링을 면제할 화이트리스트 채널을 추가합니다.',
+                    description: '금지어 필터링을 면제할 화이트리스트 유저를 추가합니다.',
                     type: ApplicationCommandOptionType.Subcommand,
-                    options: [{ name: '채널', description: '면제할 채널을 지정하세요.', type: ApplicationCommandOptionType.Channel, required: true }]
+                    options: [{ name: '유저', description: '면제할 유저를 지정하세요.', type: ApplicationCommandOptionType.User, required: true }]
                 },
                 {
                     name: '해제',
-                    description: '지정한 채널의 금지어 필터링 면제를 철회합니다.',
+                    description: '지정한 유저의 금지어 필터링 면제를 철회합니다.',
                     type: ApplicationCommandOptionType.Subcommand,
-                    options: [{ name: '채널', description: '해제할 채널을 지정하세요.', type: ApplicationCommandOptionType.Channel, required: true }]
+                    options: [{ name: '유저', description: '해제할 유저를 지정하세요.', type: ApplicationCommandOptionType.User, required: true }]
                 }
             ]
         }
@@ -327,7 +327,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ embeds: [limitUpdateEmbed] });
     }
 
-    // 4-5. 화이트리스트 채널 조작 (역할 ID 체크)
+    // 4-5. 화이트리스트 유저 조작 (역할 ID 체크 - 유저 타겟 및 임베드 변경 완료)
     if (commandName === '화이트리스트') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
@@ -335,18 +335,32 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         const subcommand = interaction.options.getSubcommand();
-        const channel = interaction.options.getChannel('채널');
+        const targetUser = interaction.options.getUser('유저');
 
         if (subcommand === '등록') {
-            await WhitelistChannel.findOneAndUpdate(
-                { guildId: interaction.guild.id, channelId: channel.id },
-                { guildId: interaction.guild.id, channelId: channel.id },
+            await WhitelistUser.findOneAndUpdate(
+                { guildId: interaction.guild.id, userId: targetUser.id },
+                { guildId: interaction.guild.id, userId: targetUser.id },
                 { upsert: true }
             );
-            await interaction.reply({ content: `✅ ${channel} 채널이 이제 금지어 필터링 **화이트리스트(면제구역)**로 등록되었습니다.`, ephemeral: true });
+
+            const registerEmbed = new EmbedBuilder()
+                .setTitle('✅ 화이트리스트 등록')
+                .setDescription(`${targetUser}님이 이제 금지어 필터링 **화이트리스트(면제구역)**로 등록되었습니다.`)
+                .setColor(0x00FF00)
+                .setTimestamp();
+
+            await interaction.reply({ embeds: [registerEmbed], ephemeral: true });
         } else if (subcommand === '해제') {
-            await WhitelistChannel.findOneAndDelete({ guildId: interaction.guild.id, channelId: channel.id });
-            await interaction.reply({ content: `✅ ${channel} 채널이 화이트리스트에서 **제거**되어 다시 금지어를 감시합니다.`, ephemeral: true });
+            await WhitelistUser.findOneAndDelete({ guildId: interaction.guild.id, userId: targetUser.id });
+
+            const removeEmbed = new EmbedBuilder()
+                .setTitle('❌ 화이트리스트 해제')
+                .setDescription(`${targetUser}님이 화이트리스트에서 **제거**되어 다시 금지어를 감시합니다.`)
+                .setColor(0xFF0000)
+                .setTimestamp();
+
+            await interaction.reply({ embeds: [removeEmbed], ephemeral: true });
         }
     }
 });
@@ -469,8 +483,8 @@ const forbiddenWords = [
 client.on('messageCreate', async (message) => {
     if (!message.guild || message.author.bot) return;
 
-    // 화이트리스트 채널 체크 (MongoDB 검사)
-    const isWhitelisted = await WhitelistChannel.findOne({ guildId: message.guild.id, channelId: message.channel.id });
+    // 화이트리스트 유저 체크 (MongoDB 검사 - 채널에서 유저ID 체크로 변경)
+    const isWhitelisted = await WhitelistUser.findOne({ guildId: message.guild.id, userId: message.author.id });
     if (isWhitelisted) return; 
 
     if (forbiddenWords.some(word => message.content.includes(word))) {
