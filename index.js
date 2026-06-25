@@ -327,7 +327,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ embeds: [limitUpdateEmbed] });
     }
 
-    // 4-5. 화이트리스트 유저 조작 (역할 ID 체크 - 유저 타겟 및 임베드 변경 완료)
+    // 4-5. 화이트리스트 유저 조작 (공개 메시지 전환 및 임베드 필드 추가 완료)
     if (commandName === '화이트리스트') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
@@ -346,21 +346,32 @@ client.on('interactionCreate', async (interaction) => {
 
             const registerEmbed = new EmbedBuilder()
                 .setTitle('✅ 화이트리스트 등록')
-                .setDescription(`${targetUser}님이 이제 금지어 필터링 **화이트리스트(면제구역)**로 등록되었습니다.`)
+                .setDescription('화이트리스트에 등록되었습니다.')
                 .setColor(0x00FF00)
+                .addFields(
+                    { name: '👤 시행자', value: `<@${interaction.user.id}>`, inline: true },
+                    { name: '🎯 대상자', value: `<@${targetUser.id}>`, inline: true }
+                )
                 .setTimestamp();
 
-            await interaction.reply({ embeds: [registerEmbed], ephemeral: true });
+            // ephemeral: false 처리하여 다른 유저들도 카드를 볼 수 있게 설정
+            await interaction.reply({ embeds: [registerEmbed], ephemeral: false });
+
         } else if (subcommand === '해제') {
             await WhitelistUser.findOneAndDelete({ guildId: interaction.guild.id, userId: targetUser.id });
 
             const removeEmbed = new EmbedBuilder()
                 .setTitle('❌ 화이트리스트 해제')
-                .setDescription(`${targetUser}님이 화이트리스트에서 **제거**되어 다시 금지어를 감시합니다.`)
+                .setDescription('화이트리스트에서 해제되었습니다.')
                 .setColor(0xFF0000)
+                .addFields(
+                    { name: '👤 시행자', value: `<@${interaction.user.id}>`, inline: true },
+                    { name: '🎯 대상자', value: `<@${targetUser.id}>`, inline: true }
+                )
                 .setTimestamp();
 
-            await interaction.reply({ embeds: [removeEmbed], ephemeral: true });
+            // 해제 카드도 모두가 볼 수 있도록 설정
+            await interaction.reply({ embeds: [removeEmbed], ephemeral: false });
         }
     }
 });
@@ -433,8 +444,8 @@ const forbiddenWords = [
     "좃빠구리", "좃빠네", "좃빠라라", "좃털", "좆같은놈", "좆까", "좆까라", "좆나", "좆년", 
     "좆도", "좆만아", "좆만한년", "좆만한놈", "좆먹어", "좆물", "좆밥", "좆빨아", "좆털", 
     "좋만한것", "주글년", "주길년", "쪼까튼", "쪼다", "찌질이", "창남", "창녀", "창녀버지", 
-    "창년", "처먹고", "처먹을", "쳐먹고", "쳐쑤셔박어", "촌씨브라리", "촌씨브랑이", "촌씨브랭이", "크리토리스", 
-    "큰보지", "클리토리스", "트랜스젠더", "페니스", "18뇬", 
+    "창년",  "쳐쑤셔박어", "촌씨브라리", "촌씨브랑이", "촌씨브랭이", "크리토리스", 
+    "큰보지", "클리토리스", "트랜스젠더", "페니스", 
     "G스팟", "ass", "bitch", "bogi", "boji", "bozi", "damm", "jaji", 
     "jazi", "jot", "oral", "sex", "suck", "zot", "갈보", "같은년", "같은뇬",
     "개대중", "개독", "개돼중","개아들",  
@@ -459,7 +470,7 @@ const forbiddenWords = [
     "은년", "을년", "임마", "입싸", "잡것", "잡넘", "접년", 
     "정액", "젖꼭지", "젖꼮찌", "쥬디", 
     "지스팟", "질싸", "짜식", "짜아식", "짜지", "짜찌", "쫍빱", "창놈", 
-    "쳐닥", "촌년", "촌놈", "캐년", "캐놈", "탱구", "팔럼", "헐보", "호구", 
+    "촌년", "촌놈", "캐년", "캐놈", "탱구", "팔럼", "헐보", "호구", 
     "호로", "후라덜", "후라들", "후래자식", "후레자식", "후레", 
     "후뢰", "후장", "새애액스", "세에엑스", "세애액스", "새에액스", "샥스", "쎽", 
     "쎡", "쎾", "쏐", "쒝", "쒞", "양년", "항문수셔", "항문쑤셔", 
@@ -475,10 +486,13 @@ const forbiddenWords = [
 client.on('messageCreate', async (message) => {
     if (!message.guild || message.author.bot) return;
 
-    // 화이트리스트 유저 체크 (MongoDB 검사 - 채널에서 유저ID 체크로 변경)
+    // 🌟 [마스터 면제 코드] 화이트리스트 유저 체크
+    // 추후 다른 규칙(링크 감시, 도배 방지 등)을 새로 만드시더라도 이 아래쪽 라인에 배치하면,
+    // 화이트리스트 유저는 무조건 이 위에서 리턴(종료)되어 아무런 제재 규칙도 받지 않게 됩니다.
     const isWhitelisted = await WhitelistUser.findOne({ guildId: message.guild.id, userId: message.author.id });
     if (isWhitelisted) return; 
 
+    // 금지어 필터링 감시
     if (forbiddenWords.some(word => message.content.includes(word))) {
         // 필터링 면제 대상: 서버 소유자이거나 관리자 역할(Role)을 가진 유저
         const hasManageRole = message.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
