@@ -58,7 +58,7 @@ const client = new Client({
 
 // --- 3. 슬래시 명령어 등록 및 봇 준비 ---
 client.on('ready', async () => {
-    console.log(`${client.user.tag} 로그인이 완료되었습니다!`);
+    compressLog = console.log(`${client.user.tag} 로그인이 완료되었습니다!`);
 
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
@@ -231,10 +231,10 @@ client.on('interactionCreate', async (interaction) => {
         const settings = await GuildSettings.findOne({ guildId: interaction.guild.id });
         const maxWarnings = settings ? settings.maxWarnings : 5;
 
-        // 🌟 조치사항에 따른 처벌 기간 가독성 텍스트 추출 로직
+        // 🌟 조치사항에 따른 처벌 기간 가독성 텍스트 추출 로직 (타임아웃 문자열 유지 보완)
         let punishmentPeriod = '없음 (구두 경고)';
         if (actionTaken.includes('타임아웃')) {
-            punishmentPeriod = actionTaken.replace(' 타임아웃', ''); 
+            punishmentPeriod = actionTaken; // 🌟 뒤에 '타임아웃'이 정상적으로 붙어 나오도록 그대로 대입
         } else if (actionTaken === '서버 추방 (킥)') {
             punishmentPeriod = '즉시 추방';
         } else if (actionTaken === '서버 차단 (밴)') {
@@ -308,7 +308,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ embeds: [manualEmbed] });
     }
 
-    // 4-3. 경고 차감
+    // 4-3. 경고 차감 (🌟 타임아웃 해제/처벌 해제 기능 완벽 추가 부각)
     if (commandName === '경고차감') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
@@ -316,13 +316,24 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         const targetUser = interaction.options.getUser('대상');
+        const targetMember = interaction.options.getMember('대상'); // 🌟 대상 멤버 구하기 추가
         const reduceAmount = interaction.options.getInteger('차감수');
         const reason = interaction.options.getString('사유');
         let userData = await Warning.findOne({ guildId: interaction.guild.id, userId: targetUser.id });
         let beforeCount = userData ? userData.count : 0;
         let afterCount = Math.max(0, beforeCount - reduceAmount);
 
-        userData = await Warning.findOneAndUpdate({ guildId: interaction.guild.id, userId: targetUser.id }, { count: afterCount }, { upsert: true, new: true });
+        // 🌟 [처벌 해제 로직] 해당 유저가 타임아웃 상태일 때 타임아웃 자동 격리 해제
+        let timeoutLiftedText = '';
+        if (targetMember && targetMember.moderatable) {
+            if (targetMember.communicationDisabledUntilTimestamp && targetMember.communicationDisabledUntilTimestamp > Date.now()) {
+                await targetMember.timeout(null, `경고 차감으로 인한 처벌 해제 (시행자: ${interaction.user.tag})`).catch(console.error);
+                timeoutLiftedText = '\n⏳ **대상자의 타임아웃 제재(처벌)가 해제되었습니다.**';
+            }
+        }
+
+        // DB 동기화 (처벌이 해제되었으므로 punishmentPeriod도 '없음'으로 리셋)
+        userData = await Warning.findOneAndUpdate({ guildId: interaction.guild.id, userId: targetUser.id }, { count: afterCount, punishmentPeriod: '없음' }, { upsert: true, new: true });
         const warnChannel = interaction.guild.channels.cache.find(ch => ch.name === '경고');
 
         const deductEmbed = new EmbedBuilder()
@@ -331,9 +342,9 @@ client.on('interactionCreate', async (interaction) => {
             .addFields(
                 { name: '👤 시행자', value: `<@${interaction.user.id}>`, inline: true },
                 { name: '🎯 대상자', value: `<@${targetUser.id}>`, inline: true },
-                { name: '📊 경고 변동 사항', value: `**${beforeCount}회 ➡️ ${userData.count}회** (\`-${reduceAmount}\`)`, inline: true }
+                { name: '📊 경고 변동 사항', value: `**${beforeCount}회 ➡️ ${userData.count}회** (\`-${reduceAmount}\`)${timeoutLiftedText}`, inline: true }
             ).setTimestamp();
-        
+            
         if (reason) deductEmbed.addFields({ name: '📝 차감 사유', value: reason });
         if (warnChannel) await warnChannel.send({ embeds: [deductEmbed] }).catch(() => {});
         await interaction.reply({ embeds: [deductEmbed] });
