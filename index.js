@@ -290,7 +290,7 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
 
-        const warnChannel = interaction.guild.channels.cache.find(ch => ch.name === '경고');
+        const warnChannel = interaction.guild.channels.cache.find(ch => ch.id === '1497953540688187654');
         const manualEmbed = new EmbedBuilder()
             .setTitle(isAutoKicked ? '🚨 [자동 제재] 경고 한도 초과' : '경고 지급')
             .setColor(isAutoKicked ? 0xFF0000 : 0xFFCC00)
@@ -334,7 +334,7 @@ client.on('interactionCreate', async (interaction) => {
 
         // DB 동기화 (처벌이 해제되었으므로 punishmentPeriod도 '없음'으로 리셋)
         userData = await Warning.findOneAndUpdate({ guildId: interaction.guild.id, userId: targetUser.id }, { count: afterCount, punishmentPeriod: '없음' }, { upsert: true, new: true });
-        const warnChannel = interaction.guild.channels.cache.find(ch => ch.name === '경고');
+        const warnChannel = interaction.guild.channels.cache.find(ch => ch.id === '1497953540688187654');
 
         const deductEmbed = new EmbedBuilder()
             .setTitle('경고 차감')
