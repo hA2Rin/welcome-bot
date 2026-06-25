@@ -396,7 +396,7 @@ client.on('interactionCreate', async (interaction) => {
                     .setDescription(`<@${targetUser.id}> 유저는 이미 화이트리스트에 등록되어 있습니다.`)
                     .setColor(0xFF0000)
                     .setTimestamp();
-                return await interaction.reply({ embeds: [alreadyExistsEmbed], ephemeral: true });
+                return await interaction.reply({ embeds: [alreadyExistsEmbed], ephemeral: false }); // 🌟 ephemeral: false로 수정 완료
             }
 
             await WhitelistUser.findOneAndUpdate(
