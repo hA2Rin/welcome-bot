@@ -292,7 +292,7 @@ client.on('interactionCreate', async (interaction) => {
 
         const warnChannel = interaction.guild.channels.cache.find(ch => ch.name === '경고');
         const manualEmbed = new EmbedBuilder()
-            .setTitle(isAutoKicked ? '🚨 [자동 제재] 경고 한도 초과' : '⚠️ [수동 제재] 관리자 경고')
+            .setTitle(isAutoKicked ? '🚨 [자동 제재] 경고 한도 초과' : '경고 지급')
             .setColor(isAutoKicked ? 0xFF0000 : 0xFFCC00)
             .addFields(
                 { name: '👤 시행자', value: isAutoKicked ? '`시스템 자동 제재`' : `<@${interaction.user.id}>`, inline: true },
@@ -326,7 +326,7 @@ client.on('interactionCreate', async (interaction) => {
         const warnChannel = interaction.guild.channels.cache.find(ch => ch.name === '경고');
 
         const deductEmbed = new EmbedBuilder()
-            .setTitle('🟢 [경고 차감] 관리자 면제 조치')
+            .setTitle('경고 차감')
             .setColor(0x00FF00)
             .addFields(
                 { name: '👤 시행자', value: `<@${interaction.user.id}>`, inline: true },
