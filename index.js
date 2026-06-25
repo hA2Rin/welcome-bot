@@ -26,7 +26,8 @@ mongoose.connect(process.env.MONGODB_URI)
 const warningSchema = new mongoose.Schema({
     guildId: String,
     userId: String,
-    count: { type: Number, default: 0 }
+    count: { type: Number, default: 0 },
+    punishmentPeriod: { type: String, default: '없음' } // 🌟 [추가] 처벌 기간 필드
 });
 const Warning = mongoose.model('Warning', warningSchema);
 
@@ -212,7 +213,7 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // 4-2. 경고 부여
+    // 4-2. 경고 부여 (자동 킥 처리 로직 반영)
     if (commandName === '경고') {
         const hasRole = interaction.member.roles.cache.some(role => ALLOWED_ROLE_IDS.includes(role.id));
         if (!hasRole) {
@@ -226,13 +227,40 @@ client.on('interactionCreate', async (interaction) => {
         const actionTaken = interaction.options.getString('조치사항');
         const customCount = interaction.options.getInteger('누적경고수');
 
+        // 서버 설정에서 경고 한도값 가져오기 (없을 경우 기본값 5회)
+        const settings = await GuildSettings.findOne({ guildId: interaction.guild.id });
+        const maxWarnings = settings ? settings.maxWarnings : 5;
+
+        // 🌟 조치사항에 따른 처벌 기간 가독성 텍스트 추출 로직
+        let punishmentPeriod = '없음 (구두 경고)';
+        if (actionTaken.includes('타임아웃')) {
+            punishmentPeriod = actionTaken.replace(' 타임아웃', ''); 
+        } else if (actionTaken === '서버 추방 (킥)') {
+            punishmentPeriod = '즉시 추방';
+        } else if (actionTaken === '서버 차단 (밴)') {
+            punishmentPeriod = '영구 차단';
+        }
+
         let finalCount;
         if (customCount !== null) {
-            await Warning.findOneAndUpdate({ guildId: interaction.guild.id, userId: targetUser.id }, { count: customCount }, { upsert: true });
+            // 🌟 처벌 기간을 포함하여 MongoDB 저장
+            await Warning.findOneAndUpdate({ guildId: interaction.guild.id, userId: targetUser.id }, { count: customCount, punishmentPeriod: punishmentPeriod }, { upsert: true });
             finalCount = customCount;
         } else {
-            const userData = await Warning.findOneAndUpdate({ guildId: interaction.guild.id, userId: targetUser.id }, { $inc: { count: 1 } }, { upsert: true, new: true });
+            // 🌟 처벌 기간을 포함하여 MongoDB 저장
+            const userData = await Warning.findOneAndUpdate({ guildId: interaction.guild.id, userId: targetUser.id }, { $inc: { count: 1 }, $set: { punishmentPeriod: punishmentPeriod } }, { upsert: true, new: true });
             finalCount = userData ? userData.count : 1;
+        }
+
+        // 🌟 경고 카운트 다 찼을 때 자동 킥 제어 플래그 수립 (관리자가 직접 밴/킥을 수동 적용하는 케이스는 스킵)
+        let isAutoKicked = false;
+        let actualActionTaken = actionTaken;
+        if (finalCount >= maxWarnings && actionTaken !== '서버 차단 (밴)' && actionTaken !== '서버 추방 (킥)') {
+            punishmentPeriod = '즉시 추방 (한도 초과)';
+            actualActionTaken = `🚨 경고 한도 초과 (${maxWarnings}회) 자동 추방`;
+            isAutoKicked = true;
+            // 변경된 한도초과용 처벌 기간 스토리지 동기화
+            await Warning.findOneAndUpdate({ guildId: interaction.guild.id, userId: targetUser.id }, { punishmentPeriod: punishmentPeriod });
         }
 
         let duration = 0;
@@ -244,22 +272,34 @@ client.on('interactionCreate', async (interaction) => {
         else if (actionTaken === '나흘 타임아웃') duration = 96 * 60 * 60 * 1000;
         else if (actionTaken.includes('일 타임아웃')) duration = parseInt(actionTaken) * 24 * 60 * 60 * 1000;
 
-        let realActionText = `**${actionTaken}**`;
+        let realActionText = `**${actualActionTaken}**`;
         if (targetMember) {
-            if (duration > 0 && targetMember.moderatable) await targetMember.timeout(duration, `관리자 수동 제재: ${reason}`).catch(console.error);
-            else if (actionTaken === '서버 추방 (킥)' && targetMember.kickable) { await targetMember.kick(`관리자 수동 제재: ${reason}`).catch(console.error); realActionText = '🔥 **서버 추방 (킥) 완료**'; }
-            else if (actionTaken === '서버 차단 (밴)' && targetMember.bannable) { await targetMember.ban({ reason: `관리자 수동 제재: ${reason}` }).catch(console.error); realActionText = '🚫 **서버 영구 차단 (밴) 완료**'; }
+            if (isAutoKicked) {
+                // 자동 킥 처리 분기 수행
+                if (targetMember.kickable) {
+                    await targetMember.kick(`경고 한도 초과 자동 제재 (누적: ${finalCount}/${maxWarnings})`).catch(console.error);
+                    realActionText = `🔥 **경고 한도 초과 (${maxWarnings}회) 자동 추방 완료**`;
+                } else {
+                    realActionText = `❌ **경고 한도 초과 자동 추방 실패 (봇보다 역할 권한이 높음)**`;
+                }
+            } else {
+                // 기존 수동 제재 분기 유지
+                if (duration > 0 && targetMember.moderatable) await targetMember.timeout(duration, `관리자 수동 제재: ${reason}`).catch(console.error);
+                else if (actionTaken === '서버 추방 (킥)' && targetMember.kickable) { await targetMember.kick(`관리자 수동 제재: ${reason}`).catch(console.error); realActionText = '🔥 **서버 추방 (킥) 완료**'; }
+                else if (actionTaken === '서버 차단 (밴)' && targetMember.bannable) { await targetMember.ban({ reason: `관리자 수동 제재: ${reason}` }).catch(console.error); realActionText = '🚫 **서버 영구 차단 (밴) 완료**'; }
+            }
         }
 
         const warnChannel = interaction.guild.channels.cache.find(ch => ch.name === '경고');
         const manualEmbed = new EmbedBuilder()
-            .setTitle('⚠️ [수동 제재] 관리자 경고')
-            .setColor(0xFFCC00)
+            .setTitle(isAutoKicked ? '🚨 [자동 제재] 경고 한도 초과' : '⚠️ [수동 제재] 관리자 경고')
+            .setColor(isAutoKicked ? 0xFF0000 : 0xFFCC00)
             .addFields(
-                { name: '👤 시행자', value: `<@${interaction.user.id}>`, inline: true },
+                { name: '👤 시행자', value: isAutoKicked ? '`시스템 자동 제재`' : `<@${interaction.user.id}>`, inline: true },
                 { name: '🎯 대상자', value: `<@${targetUser.id}>`, inline: true },
-                { name: '📊 누적 경고 수', value: `**${finalCount}회**`, inline: true },
+                { name: '📊 누적 경고 수', value: `**${finalCount} / ${maxWarnings}회**`, inline: true },
                 { name: '⏳ 조치 사항', value: realActionText, inline: true },
+                { name: '⏱️ 처벌 기간', value: `\`${punishmentPeriod}\``, inline: true }, // 🌟 [추가] 임베드에 처벌 기간 배치
                 { name: '📝 경고 이유', value: reason },
                 { name: '💬 무슨 말을 했는지', value: `\`\`\`${whatTheySaid}\`\`\`` }
             ).setTimestamp();
@@ -471,7 +511,7 @@ const forbiddenWords = [
     "쳐닥", "촌년", "촌놈", "캐년", "캐놈", "탱구", "팔럼", "헐보", "호구", 
     "호로", "후라덜", "후라들", "후래자식", "후레자식", "후레", 
     "후뢰", "후장", "새애액스", "세에엑스", "세애액스", "새에액스", "샥스", "쎽", 
-    "쎡", "쎾", "쏐", "쒝", "쒞", "양년", "항문수셔", "항문쑤셔", 
+    "쎽", "쎾", "쏐", "쒝", "쒞", "양년", "항문수셔", "항문쑤셔", 
     "허버리년", "허벌년", "허벌보지", "허벌자식", "허벌자지", "허젚", "허졉", 
     "허좁", "헐렁보지", "혀로보지핧기", "호냥년", "호로자슥", "호로자식", "호로짜식", "호루자슥", 
     "호모", "호졉", "호좁", "후라덜넘", "후장꽂아", "후장뚫어", "흐접", "흐젚", 
